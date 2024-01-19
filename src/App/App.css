@@ -1,0 +1,11 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 8px;
+}
+
+label {
+    margin-right: 8px;
+}
