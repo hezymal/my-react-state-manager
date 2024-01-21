@@ -1,13 +1,15 @@
-import { useEffect } from "react";
+import { useMemo, useState } from "react";
 import {
     getState,
-    setInitialState,
     setState,
     waitState,
-    waitCall,
     waitTime,
     useGenerator,
 } from "./useGenerator";
+
+const STAGE_GENERAL = "GENERAL";
+const STAGE_ADDRESS = "ADDRESS";
+const STAGE_DONE = "DONE";
 
 function fakeRequest(data, options = {}) {
     return new Promise((resolve, reject) => {
@@ -21,7 +23,7 @@ function fakeRequest(data, options = {}) {
     });
 }
 
-function isValidUser(user) {
+function isValidGeneral(user) {
     return !!user.name;
 }
 
@@ -29,7 +31,7 @@ function isValidAddress(address) {
     return address.cityName.length > 3;
 }
 
-function saveUser(user) {
+function saveGeneralInfo(user) {
     return fakeRequest(user);
 
     // throw error:
@@ -40,141 +42,138 @@ function checkAddress(address) {
     return fakeRequest(address, { response: "hash" });
 }
 
-function saveAddress(address, checkingHash) {
+function saveAddressInfo(address, checkingHash) {
     return fakeRequest({ ...address, checkingHash });
 }
 
-function* registryGeneralInformation() {
-    yield setInitialState({
-        name: "",
-        isSubmitting: false,
-        isLoading: false,
-        isSubmitted: false,
-        error: "",
-    });
-
+function* registryGeneralInfo(setGeneralInfo, setIsLoading, setError) {
     while (true) {
-        yield waitState((user) => isValidUser(user) && user.isSubmitting);
-        yield setState((state) => ({ ...state, isLoading: true }));
+        yield waitState((state) => {
+            console.log(state);
+            return (
+                isValidGeneral(state.generalInfo) &&
+                state.generalInfo.isSubmitting
+            );
+        });
+
+        setIsLoading(true);
         try {
-            const user = yield getState();
-            yield waitCall(saveUser, user);
+            const state = yield getState();
+            yield saveGeneralInfo(state);
             break;
         } catch (error) {
-            yield setState((state) => ({
-                ...state,
-                error: error.message,
-                isSubmitting: false,
-            }));
+            setError(error.message);
+            setGeneralInfo((state) => ({ ...state, isSubmitting: false }));
         } finally {
-            yield setState((state) => ({ ...state, isLoading: false }));
+            setIsLoading(false);
         }
     }
-
-    yield setState((state) => ({ ...state, error: "", isSubmitted: true }));
 }
 
-function* registryAddressInformation() {
-    yield setInitialState({
-        cityName: "",
-        isSubmitting: false,
-        isLoading: false,
-        isSubmitted: false,
-        error: "",
-    });
-
+function* registryAddressInfo(setAddressInfo, setIsLoading, setError) {
     while (true) {
         yield waitState(
-            (address) => isValidAddress(address) && address.isSubmitting
+            (state) =>
+                isValidAddress(state.addressInfo) &&
+                state.addressInfo.isSubmitting
         );
 
-        yield setState((state) => ({ ...state, isLoading: true }));
+        setIsLoading(true);
         try {
-            const address = yield getState();
-            const checkingHash = yield waitCall(checkAddress, address);
-            yield waitCall(saveAddress, address, checkingHash);
+            const state = yield getState();
+            const checkingHash = yield checkAddress(state);
+            yield saveAddressInfo(state, checkingHash);
             break;
         } catch (error) {
-            yield setState((state) => ({
-                ...state,
-                error: error.message,
-                isSubmitting: false,
-            }));
+            setError(error.message);
+            setAddressInfo((state) => ({ ...state, isSubmitting: false }));
         } finally {
-            yield setState((state) => ({ ...state, isLoading: false }));
+            setIsLoading(false);
         }
     }
-
-    yield setState((state) => ({ ...state, error: "", isSubmitted: true }));
-}
-
-function* closeForm() {
-    yield setInitialState({ isFinish: false, isShowConglaturation: false });
-    yield waitState((state) => state.isFinish);
-    yield waitTime(1000);
-    yield setState((state) => ({ ...state, isShowConglaturation: true }));
 }
 
 const useForm = () => {
-    const [user, setUser] = useGenerator(registryGeneralInformation);
-    const [address, setAddress] = useGenerator(registryAddressInformation);
-    const [closing, setClosing] = useGenerator(closeForm);
+    const [stage, setStage] = useState(STAGE_GENERAL);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [generalInfo, setGeneralInfo] = useState({
+        name: "",
+        isSubmitting: false,
+    });
+    const [addressInfo, setAddressInfo] = useState({
+        cityName: "",
+        isSubmitting: false,
+    });
 
-    useEffect(() => {
-        if (address.isSubmitted) {
-            setClosing((closing) => ({ ...closing, isFinish: true }));
-        }
-    }, [address.isSubmitted, setClosing]);
+    const state = useMemo(
+        () => ({ generalInfo, addressInfo }),
+        [generalInfo, addressInfo]
+    );
+
+    useGenerator(function* registry() {
+        yield* registryGeneralInfo(setGeneralInfo, setIsLoading, setError);
+        setStage(STAGE_ADDRESS);
+
+        yield* registryAddressInfo(setAddressInfo, setIsLoading, setError);
+        setStage(STAGE_DONE);
+    }, state);
 
     const submit = (event) => {
         event.preventDefault();
 
-        if (!user.isSubmitted) {
-            setUser((user) => ({ ...user, isSubmitting: true }));
-            return;
-        }
+        switch (stage) {
+            case STAGE_GENERAL:
+                setGeneralInfo((state) => ({ ...state, isSubmitting: true }));
+                break;
 
-        if (!address.isSubmitted) {
-            setAddress((address) => ({ ...address, isSubmitting: true }));
-            return;
+            case STAGE_ADDRESS:
+                setAddressInfo((state) => ({ ...state, isSubmitting: true }));
+                break;
         }
     };
 
     return {
-        user,
-        address,
-        closing,
-        setUser,
-        setAddress,
-        setClosing,
+        stage,
+        isLoading,
+        error,
+        generalInfo,
+        addressInfo,
+        setGeneralInfo,
+        setAddressInfo,
         submit,
     };
 };
 
 export const RegistrationForm = () => {
-    const form = useForm();
+    const {
+        stage,
+        isLoading,
+        error,
+        generalInfo,
+        addressInfo,
+        setGeneralInfo,
+        setAddressInfo,
+        submit,
+    } = useForm();
 
-    const renderGeneralForm = (general, setGeneral) => {
-        if (general.isLoading) {
-            return <p>Loading...</p>;
-        }
-
+    const renderGeneralInfo = () => {
         return (
-            <form onSubmit={form.submit}>
+            <form onSubmit={submit}>
                 <p>
                     <label>Your Name</label>
                     <input
                         type="text"
-                        value={general.name}
+                        value={generalInfo.name}
                         onChange={(event) =>
-                            setGeneral((general) => ({
-                                ...general,
+                            setGeneralInfo((generalInfo) => ({
+                                ...generalInfo,
                                 name: event.target.value,
                             }))
                         }
                     />
                 </p>
-                {general.error && <p>{general.error}</p>}
+                {error && <p>{error}</p>}
                 <p>
                     <button type="submit">Save General</button>
                 </p>
@@ -182,27 +181,23 @@ export const RegistrationForm = () => {
         );
     };
 
-    const renderAddressForm = (address, setAddress) => {
-        if (address.isLoading) {
-            return <p>Loading...</p>;
-        }
-
+    const renderAddressInfo = () => {
         return (
-            <form onSubmit={form.submit}>
+            <form onSubmit={submit}>
                 <p>
                     <label>City Name</label>
                     <input
                         type="text"
-                        value={address.cityName}
+                        value={addressInfo.cityName}
                         onChange={(event) =>
-                            setAddress((address) => ({
-                                ...address,
+                            setAddressInfo((addressInfo) => ({
+                                ...addressInfo,
                                 cityName: event.target.value,
                             }))
                         }
                     />
                 </p>
-                {address.error && <p>{address.error}</p>}
+                {error && <p>{error}</p>}
                 <p>
                     <button type="submit">Save Address</button>
                 </p>
@@ -210,17 +205,17 @@ export const RegistrationForm = () => {
         );
     };
 
-    if (!form.user.isSubmitted) {
-        return renderGeneralForm(form.user, form.setUser);
+    if (isLoading) {
+        return <p>Loading...</p>;
     }
 
-    if (!form.address.isSubmitted) {
-        return renderAddressForm(form.address, form.setAddress);
+    if (stage === STAGE_GENERAL) {
+        return renderGeneralInfo();
     }
 
-    if (form.closing.isShowConglaturation) {
-        return <p>Conglaturation, you're registered!</p>;
+    if (stage === STAGE_ADDRESS) {
+        return renderAddressInfo();
     }
 
-    return <p>Loading...</p>;
+    return <p>Conglaturation, you're registered!</p>;
 };
